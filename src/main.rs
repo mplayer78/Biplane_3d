@@ -1,149 +1,128 @@
-use std::f32::consts::PI;
+// //! Loads and renders a glTF file as a scene.
 
-use bevy::prelude::*;
+use std::{f32::consts::PI};
+
+use bevy::{prelude::*, transform};
 
 fn main() {
     App::new()
-    .add_startup_system(setup_camera)
-    .add_startup_system(spawn_plane)
-    .add_system(controls)
-    .add_system(physics)
-    .add_system(set_position_from_heading)
-    .add_system(set_translation_from_position)
-    .add_system(set_rotation_from_heading)
-    .add_system(set_flip_from_direction)
-    .add_plugins(DefaultPlugins)
-    .run();
+        .insert_resource(AmbientLight {
+            color: Color::WHITE,
+            brightness: 1.0 / 4.0f32,
+        })
+        .add_plugins(DefaultPlugins)
+        .add_startup_system(setup)
+        .add_system(p1_control)
+        .run();
 }
 
-fn setup_camera(mut commands: Commands) {
-    commands.spawn_bundle(Camera2dBundle::default());
-}
+const INITIAL_ROTATION: Quat = Quat::from_xyzw(0.0, 0.0, 0.0, 1.0);
 
-const PLAYER_SPRITE: &str = "green_plane.png";
+fn setup(
+    mut commands: Commands, 
+    asset_server: Res<AssetServer>,
+) {
+    let translation = Vec3::new(50.0, 50.0, 50.0);
 
-#[derive(Component)]
-struct Aeroplane;
-
-#[derive(Component)]
-struct Heading {
-    pitch: f32,
-    direction: f32,
-    speed: f32,
-}
-
-#[derive(Component)]
-struct Controlable;
-
-#[derive(Component)]
-struct Position(Vec3);
-
-const BASE_SPEED: f32 = 3.0;
-
-fn spawn_plane(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands
-        .spawn_bundle(SpriteBundle {
-            texture: asset_server.load(PLAYER_SPRITE),
-            sprite: Sprite {
-                custom_size: Some(Vec2::new(10.0, 5.9)),
+    commands.spawn_bundle(Camera3dBundle {
+        transform: Transform::from_translation(translation)
+            .looking_at(Vec3::ZERO, Vec3::Y),
+        ..Default::default()
+    });
+    const HALF_SIZE: f32 = 10.0;
+    commands.spawn_bundle(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            shadow_projection: OrthographicProjection {
+                left: -HALF_SIZE,
+                right: HALF_SIZE,
+                bottom: -HALF_SIZE,
+                top: HALF_SIZE,
+                near: -10.0 * HALF_SIZE,
+                far: 10.0 * HALF_SIZE,
                 ..default()
             },
+            shadows_enabled: true,
+            ..default()
+        },
+        ..default()
+    });
+    
+    commands.spawn_bundle(SpotLightBundle {
+        transform: Transform::from_xyz(0.0, 0.0, 20.0)
+            .looking_at(Vec3::new(-1.0, 0.0, 0.0), Vec3::Z),
+        spot_light: SpotLight {
+            intensity: 16000.0, // lumens - roughly a 100W non-halogen incandescent bulb
+            color: Color::GREEN,
+            shadows_enabled: true,
+            inner_angle: 0.6,
+            outer_angle: 0.8,
+            ..default()
+        },
+        ..default()
+    });
+    
+    commands.spawn()
+        .insert_bundle(SceneBundle {
+            scene: asset_server.load("sopwith_camel.gltf#Scene0"),
             transform: Transform {
-                scale: Vec3::new(10.0, 10.0, 0.0),
-                rotation: Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), 0.0),
+                rotation: INITIAL_ROTATION,
+                translation: Vec3::new(0.0, 5.6 / 2.0, 0.0),
                 ..default()
             },
             ..default()
         })
-        .insert(Aeroplane)
-        .insert(Controlable)
-        .insert(Position(Vec3 { x: 0.0, y: 0.0, z: 0.0 }))
-        .insert(Heading { pitch: 0.0, direction: 1.0, speed: BASE_SPEED});
+        .insert(Heading(INITIAL_ROTATION))
+        .insert(Roll(INITIAL_ROTATION))
+        .insert(Pitch(INITIAL_ROTATION))
+        .insert(Player1);
 }
 
-const PITCH_DELTA: f32 = 0.05;
+#[derive(Component)]
+struct Player1;
 
-fn controls(
+#[derive(Component)]
+struct Heading(Quat);
+
+#[derive(Component)]
+struct Roll(Quat);
+
+#[derive(Component)]
+struct Pitch(Quat);
+
+const TURN_SPEED: f32 = 0.1;
+const PITCH_SPEED: f32 = 0.1;
+
+fn p1_control(
     keyboard_input: Res<Input<KeyCode>>,
-    mut movement: Query<(&mut Heading, &Controlable)>,
+    mut movement: Query<(&mut Transform, &mut Heading, &mut Roll, &mut Pitch), With<Player1>>,
 ) {
-    
-    for (mut heading, _) in movement.iter_mut() {
-
-        if keyboard_input.pressed(KeyCode::Up) {
-            heading.pitch += PITCH_DELTA;
-        }
-        if keyboard_input.pressed(KeyCode::Down) {
-            heading.pitch -= PITCH_DELTA;
-        }
-        
-        if keyboard_input.pressed(KeyCode::Left) {
-            if heading.direction > 0.0 {
-                heading.direction *= -1.0;
-                heading.speed = BASE_SPEED;
+        for (mut transform, mut heading, mut roll, mut pitch) in movement.iter_mut() {
+            let ( axis, angle ) = roll.0.to_axis_angle();
+            if keyboard_input.pressed(KeyCode::Left) {
+                if angle * axis.z < 1.0 {
+                    roll.0 *= Quat::from_axis_angle(Vec3::Z, PITCH_SPEED );
+                }
+            }   
+            if keyboard_input.pressed(KeyCode::Right) {
+                println!("Right");
+                if angle * axis.z > -1.0 {
+                    roll.0 *= Quat::from_axis_angle(Vec3::Z, -PITCH_SPEED);
+                } 
+            }            
+            if !keyboard_input.any_pressed([KeyCode::Left, KeyCode::Right]) {
+                if angle * axis.z > 0.0 {
+                    roll.0 *= Quat::from_axis_angle(Vec3::Z, -PITCH_SPEED);
+                } else if angle * axis.z < 0.0 {
+                    roll.0 *= Quat::from_axis_angle(Vec3::Z, PITCH_SPEED );
+                }
             }
-        }
-        
-        if keyboard_input.pressed(KeyCode::Right) {
-            if heading.direction < 0.0 {
-                heading.direction *= -1.0;
-                heading.speed = BASE_SPEED;
+            if keyboard_input.pressed(KeyCode::Up) {
+                pitch.0 *= Quat::from_axis_angle(Vec3::X, PITCH_SPEED );
             }
+            if keyboard_input.pressed(KeyCode::Down) {
+                pitch.0 *= Quat::from_axis_angle(Vec3::X, -PITCH_SPEED );
+            }
+            heading.0 *= Quat::from_axis_angle(Vec3::Y, angle * axis.z * -TURN_SPEED);
+            transform.rotation = heading.0.mul_quat(roll.0).mul_quat(pitch.0);
         }
-        
-        if heading.pitch > 0.0 {
-            heading.pitch = heading.pitch.min(1.0);
-        } else {
-            heading.pitch = heading.pitch.max(-1.0);
-        }
-    }
-}
-
-fn set_position_from_heading(
-    mut movement: Query<(&mut Position, &Heading)>
-) {
-    for (mut position, heading) in movement.iter_mut() {
-        position.0.x += (heading.pitch * PI / 2.0).cos() * heading.speed * heading.direction;
-        position.0.y += (heading.pitch * PI / 2.0).sin() * heading.speed;
-    }
-}
-
-fn set_translation_from_position(
-    mut movement: Query<(&mut Transform, &Position)>
-) {
-    for (mut transform, position) in movement.iter_mut() {
-        transform.translation = position.0
-    }
-}
-
-fn set_rotation_from_heading(
-    mut movement: Query<(&mut Transform, &Heading)>
-) {
-    for (mut transform, heading) in movement.iter_mut() {
-        transform.rotation = Quat::from_axis_angle(Vec3::new(0.0, 0.0, 1.0), heading.pitch * PI / 2.0 * heading.direction)
-    }
-}
-
-fn set_flip_from_direction(
-    mut movement: Query<(&mut Transform, &Heading)>
-) {
-    for (mut transform, heading) in movement.iter_mut() {
-        if heading.direction < 0.0 && transform.scale.x > 0.0 {
-            transform.scale.x *= -1.0
-        } else if heading.direction > 0.0 && transform.scale.x < 0.0 {
-            transform.scale.x *= -1.0
-        }
-    }
-}
-
-const GRAVITY_FACTOR: f32 = 0.1;
-const TERMINAL_VELOCITY_FACTOR: f32 = 2.0;
-const ACCELERATION: f32 = 0.005;
-
-fn physics(
-    mut movement: Query<&mut Heading>
-) {
-    for mut heading in movement.iter_mut() {
-        heading.speed = (BASE_SPEED * (1.0 + heading.pitch.powf(3.0) * -1.0)).min(heading.speed + ACCELERATION);
-    }
 }
